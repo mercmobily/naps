@@ -20,6 +20,9 @@ Copy the example config file in /etc
 Naps is used to:
 
 * Generate a config file suitable for Nginx as a reverse proxy
+* Allocate local ports for the defined apps
+* Set a sane (overridable) environment for the app to run into
+* Set which user the app will run under
 * Run and stop defined apps using `forever`
 * List all applications marked as startable
 * Run and stop all defined apps
