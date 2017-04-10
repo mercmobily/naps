@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 
-// https://github.com/foreverjs/forever/issues/918
+/*
 
-var fs = require('/usr/lib/node_modules/fs-extra');
+* Function to check if entries in /var/naps are current, delete if not (check proc filesystem)
+* Add timestamp, uid and appName to output of child processes
+*/
+
+var fs = require('fs-extra');
+var nodemailer = require('nodemailer');
+var childProcess = require('child_process');
 var execSync = require('child_process').execSync;
 var spawn = require('child_process').spawn;
 var path = require('path');
+var transporter = nodemailer.createTransport('smtp://localhost:25');
+
 
 var action = process.argv[ 2 ];
 var p1 = process.argv[ 3 ];
@@ -28,7 +36,7 @@ Usage:
     List all apps that can be started
 
     ${cmd} started or ${cmd} s
-    List all apps currently running under forever (considering all possible uid/gid pairs)
+    List all apps currently running
 
     ${cmd} startall [continuous]
     Start all apps that can be started. 
@@ -39,10 +47,10 @@ Usage:
     Stop all apps
 
     ${cmd} start <app-name>
-    Start a specific app using forever
+    Start a specific app
 
     ${cmd} stop <app-name>
-    Start a specific app using forever
+    Start a specific app
     
     ${cmd} deploy <development-app> <production-app>
     Will overwrite development app onto production one, archiving the current production one.
@@ -68,10 +76,11 @@ if( !action ){
 
 
 var Generator = function( inputConfPath ){
-  this.emails = '';
+  this.mailTo = '';
   this.ip = '';
-  this.dir = '/var/www/node-apps/';
-  this.logdir = '/var/log/forever/';
+  this.dir = '/var/www/node-apps';
+  this.logdir = '/var/log/naps';
+  this.vardir = '/var/naps';
   this.portMap = {};
   this.confLines = [];
   this.startableHash = {};
@@ -125,6 +134,13 @@ Generator.prototype = {
 
     LOGDIR: function( confLine, logdir ){
       this.logdir = logdir; 
+      if( ! fs.existsSync( logdir) ) fs.mkdirSync( logdir );
+      return '';
+    },
+
+    VARDIR: function( confLine, vardir ){
+      this.vardir = vardir; 
+      if( ! fs.existsSync( vardir) ) fs.mkdirSync( vardir );
       return '';
     },
 
@@ -134,8 +150,13 @@ Generator.prototype = {
       return '';
     },
 
-    EMAILS: function( confLine, emails ){
-      this.emails = emails; 
+    MAILFROM: function( confLine, mailFrom ){
+      this.mailFrom = mailFrom; 
+      return '';
+    },
+
+    MAILTO: function( confLine, mailTo ){
+      this.mailTo = mailTo; 
       return '';
     },
 
@@ -178,7 +199,6 @@ Generator.prototype = {
         IPADDRESS: 'localhost',
         PORT: confLine[ 2 ], // 8080
         SERVER: 'server.js',
-        HOME: '/home/forever',
       };
 
       if( confLine[ 6 ] ){
@@ -195,7 +215,7 @@ Generator.prototype = {
 
       confLine[ 6 ] = env;
 
-      this.errorLogs[ env.APPNAME ] = `/var/log/forever/${env.APPNAME}-err.log`
+      this.errorLogs[ env.APPNAME ] = `${this.logdir}/${env.APPNAME}-err.log`
 
       return '';
     },
@@ -364,20 +384,24 @@ Generator.prototype = {
 
     var env = confLine[ 6 ];
 
+    var running;
 
-    var r = '';
-
-    // If nothing is found, grep will return 0
+    var pidFile = `${this.vardir}/${env.APPNAME}`;
     try { 
-      r = execSync(`netstat -tuplen | cut -b 21-44 | grep '127.0.0.1:${env.PORT}'` );
-    } catch( e ) { }
-
-    if( r.length ){
-      if( !quiet ) console.log(`Cannot run process ${env.APPNAME} as the port is already taken`);
+      running = fs.existsSync( pidFile );
+    } catch( e ) {
+      console.log("Error checking if process file exists:", e );
+      if( exitOnFail ) process.exit(9);
       return;
     }
 
-    if( !quiet ) console.log("RUNNING:", confLine );
+    console.log("Checked for:", pidFile );
+    if( running ){
+      console.log(`Cannot run process ${env.APPNAME} as the process is already running`);
+      return;
+    }
+
+   console.log("RUNNING:", confLine );
 
     // Work out gid and uid
     var uidGid = confLine[ 4 ].split( /:/ );
@@ -387,81 +411,138 @@ Generator.prototype = {
     // Work out cwd
     var cwd = path.join( this.dir, env.APPNAME );
 
-    var extraForeverSwitch = "";
-    if( env.NODE_ENV == 'development' ){
-      var extraForeverSwitch ="--watch --watchDirectory " + cwd;
-    }       
-
     var lp = env.APPNAME;
     var server = env.SERVER;
     var appName = env.APPNAME;
-    var foreverCommand = `/usr/bin/forever start -m 1 --killSignal=SIGTERM --uid ${appName} -a ${extraForeverSwitch} -l /var/log/forever/${lp}-forever.log -o /var/log/forever/${lp}-out.log -e /var/log/forever/${lp}-err.log ${server}`;
+    //var command = `/usr/bin/node ${server} >> ${this.logdir}/${lp}-out.log 2>>${this.logdir}/${lp}-err.log &`;
+    var command = `/usr/bin/node  /var/www/node-apps/gigsnet/${server}`;
 
-    if( !quiet ) console.log("Starting " + confLine[ 1 ] + " in directory", cwd, "with gid and uid", gid, uid, "and with env:\nForever command:\n", foreverCommand, "\nEnvironment:", env );
+    console.log("Starting " + confLine[ 1 ] + " in directory", cwd, "with gid and uid", gid, uid, "and with env:\nCommand:\n", command, "\nEnvironment:", env );
     
     try {
-      execSync( foreverCommand, { env: env, uid: uid, gid: gid, cwd: cwd } );
+      var out = fs.openSync(`${this.logdir}/${lp}-out.log`, 'a');
+      var err = fs.openSync(`${this.logdir}/${lp}-err.log`, 'a');
     } catch( e ){
-      if( !quiet ) console.log("Could not execute command:", e );
+      console.log("Could not open log files for writing:", e );
+      if( exitOnFail) process.exit(9);
+      return;
+    }
+
+    try {
+      var child = childProcess.spawn( '/usr/bin/node', [ server ], { stdio: [ 'ignore', out, err ], detached: true, env: env, uid: uid, gid: gid, cwd: cwd } );
+    } catch( e ) {
+      console.log("Could not run node:", e );
+      if( exitOnFail) process.exit(9);
+      return;
+    }
+    child.unref();
+
+    try { 
+      fs.writeFileSync( pidFile, `${env.APPNAME}:${child.pid}` );
+    } catch( e ) {
+      console.log("Error creating pid file for process...", e );
       if( exitOnFail) process.exit(9);
     }
+
+    console.log("Success!");
   },
 
-  stop: function( confLine, quiet, exitOnFall ){
-    console.log("Stopping forever processes for ", confLine[ 1 ], " as gis/uid" + confLine[ 4 ]  );
+  stop: function( confLine, quiet, exitOnFail ){
 
-     var env = {
-      HOME: '/home/forever',
-    };
-
+    var env = confLine[ 6 ];
     var appName = confLine[ 1 ];
+    var pidFile = `${this.vardir}/${env.APPNAME}`;
 
-    // Work out gid and uid
-    var uidGid = confLine[ 4 ].split( /:/ );
-    var uid = Number( uidGid[ 0 ] );
-    var gid = Number( uidGid[ 1 ] );
- 
-    // Work out command
-    var foreverCommand = `forever stop ${appName}`;
-    if( !quiet) console.log("COMMAND:", foreverCommand );
+    try { 
+      running = fs.existsSync( pidFile );
+    } catch( e ) {
+      console.log("Error checking if process file exists:", e );
+      if( exitOnFail) process.exit(9);
+      return;
+    }
+
+    if( !running ){
+      console.log(`${appName} is not running` );
+      return;
+    }
+
+
+    console.log("Stopping  processes for ", confLine[ 1 ], " as gis/uid" + confLine[ 4 ]  );
+
+    try { 
+      var pidInfo = fs.readFileSync( pidFile ).toString().split(':');
+    } catch( e ) {
+      console.log("Error reading the pid file for the process:", e );
+      if( exitOnFail) process.exit(9);
+      if( exitOnFail) process.exit(9);
+      return;
+    }
 
     try {
-      execSync( foreverCommand, { uid: uid, gid: gid, env: env } );
+      process.kill( pidInfo[ 1 ], 'SIGTERM' );
     } catch( e ){
-      if( !quiet ) console.log("Could not execute command:", e );
-      if( exitOnFall ) process.exit(9);
+      console.log("Error sending SIGTERM signal:", e );
+      if( exitOnFail) process.exit(9);
+      return;
     }
-    if( !quiet) console.log("Stop executed on", appName );
+
+    try { 
+      fs.unlinkSync( pidFile );
+    } catch( e ) {
+      console.log("Error deleting the pid file for the pricess after kill:", e );
+      if( exitOnFail) process.exit(9);
+      return;
+    }
+
+    
+    console.log(`${appName} successfully stopped!` );
+ 
   },
 
 
-  listForever: function( uidGidString ){
-    console.log("Forever processes startning under gis/uid", uidGidString );
+  list: function( uidGidString ){
 
-     var env = {
-      HOME: '/home/forever',
-    };
-
-    // Work out gid and uid
-    var uidGid = uidGidString.split( /:/ );
-    var uid = Number( uidGid[ 0 ] );
-    var gid = Number( uidGid[ 1 ] );
- 
-    // Work out command
-    var foreverCommand = `forever list`;
+    vardir = this.vardir;
 
     try {
-      var res = execSync( foreverCommand, { uid: uid, gid: gid, env: env } );
-    } catch( e ){
-      console.log("Could not execute command:", e );
+      var appNames = fs.readdirSync( this.vardir );
+    } catch( e  ){
+      console.log("Could not read directory:", this.vardir );
       process.exit(9);
     }
-    console.log( res.toString() );
-    
+
+    if( !appNames.length ){
+      console.log("No app currently running" );
+      process.exit( 0 );
+    }
+
+    console.log("");
+    console.log("Currently running apps:");
+    console.log("-----------------------");
+
+    appNames.forEach( ( appName ) => {
+      try { 
+        var pidFile = `${vardir}/${appName}`;
+        var pidInfo = fs.readFileSync( pidFile ).toString().split(':');
+      } catch( e ) {
+        console.log("Error reading the pid file for the process:", e );
+        if( exitOnFail) process.exit(9);
+      }
+
+      confLine = this.startableHash[ appName ];
+      console.log( pidInfo[ 1 ] + ' - ' + confLine[ 1 ] + ' (' + confLine[ 2 ] + ') [' + confLine[ 3 ]  + '] running as ' + confLine[ 4 ] );
+    });
+
+
+    process.exit( 0 );
   },
 
 
   logcheck: function(){
+
+    var startableHash = this.startableHash;
+    var mailFrom = this.mailFrom;
+    var mailTo = this.mailTo;
 
     Object.keys( this.errorLogs ).forEach( (appName) => {
       var logFile = this.errorLogs[ appName ];
@@ -519,21 +600,39 @@ Generator.prototype = {
           // Set the new size for the next time it's watched
           try { newSize =  fs.statSync( logFile ).size; } catch ( e ) { size = 0 };
 
-
           try {
             var contents = new Buffer( newSize - size );
             var fd = fs.openSync( logFile, 'r+' );
             fs.readSync( fd, contents, 0, newSize - size, size );
-            console.log(`[${appName}] Emailing: `, contents.toString() );
+          } catch( e ){
+            console.log(`[${appName}] Couldn't read the log file:`, e );
+            dealingWithChange = false;
+            return;
+          }
+
+          console.log(`[${appName}] Emailing: `, contents.toString() );
+
+          // setup e-mail data with unicode symbols
+          var mailOptions = {
+            from: `"${mailFrom} 👥" <${mailFrom}>`, // sender address
+            to: mailTo,
+            subject: `[${appName}] Error log grew`,
+            text: contents.toString(),
+          };
+
+          // send mail with defined transport object
+          transporter.sendMail(mailOptions, function (err, info) {
+
+            // In case of errors, simply log it
+            if (err){
+              console.log(`[${appName}] FAILED sending an email!`, err );
+            } else {
+              console.log(`[${appName}] Email successfully dispatched` );
+            }
 
             size = newSize;
             dealingWithChange = false;
-
-
-          } catch( e ){
-            console.log(`[${appName}] Couldn't read the log file:`, e );
-          }
-
+         });
 
         }, 2000 );
 
@@ -550,17 +649,23 @@ Generator.constructur = Generator;
 var generator = new Generator('/etc/naps.conf');
 
 
+
+
+
+
+
 switch( action ){
 
   case 'started':
   case 's':
-    for( var uidGid in generator.uidGidHash ){
-      generator.listForever( uidGid );
-    }
+    generator.list();
   break;
 
   case 'startable':
   case 'l':
+    console.log("");
+    console.log("Available apps:");
+    console.log("---------------");
     // Show list of startable server, showing command, port and 
     generator.confLines.forEach( (confLine) => {
       if( confLine[ 0 ] == 'RUN' ){
@@ -620,6 +725,12 @@ switch( action ){
       process.exit(1);
     }
 
+    if( p1 == 'continuous' && action == 'stopall' ){
+      console.log("The [continuous] option will only work for startall");
+      process.exit(1);
+    }
+
+
     var startStopAllFunc = function( quiet ){
       Object.keys( generator.startableHash ).forEach( (appName ) => {
         var confLine = generator.startableHash[ appName ];
@@ -633,11 +744,37 @@ switch( action ){
     }
 
     if( p1 == 'continuous' ){
+
+      require('console-stamp')(console, '[mmm-dd-yyyy HH:MM:ss HH:MM:ss.l]');
+
+      console.log("****** Running in continuous mode, waiting an initial 10s");
+      // Wait 10s
       setTimeout( function(){
-        setInterval( function(){
-          startStopAllFunc( true );
-        }, 10000 );
-      }, 60000 );
+
+        console.log("****** Enough waiting, starting the apps!");
+
+        // Start the lot
+        startStopAllFunc( false );
+
+        console.log("****** Waiting 240s to give time to the apps to settle");
+
+
+        // Wait 240s 
+        setTimeout( function(){
+
+          console.log("****** Enough waiting: setting the interval, it will run every 10 seconds");
+
+            
+          // Interval 10s: Try and rerun
+          setInterval( function(){
+
+            console.log("****** Attempting to start the lot");
+            startStopAllFunc( false );
+
+          }, 10000  );
+        }, 240000);
+      }, 10000 );
+
     } else {
       startStopAllFunc( false );
     }
