@@ -5,12 +5,12 @@
     "node",
     "deploy"
   ],
-  "main": "index.js",
-  "version": "0.1.1",
+  "main": "naps.js",
+  "version": "0.1.4",
   "private": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/mercmobily/naps.git"
+    "url": "git+https://github.com/mercmobily/naps.git"
   },
   "author": "Tony Mobily",
   "dependencies": {
@@ -22,8 +22,11 @@
   },
   "homepage": "https://github.com/mercmobily/naps",
   "devDependencies": {},
-  "license": "GPL",
+  "license": "GPL-3.0",
   "bin": {
-    "ryver": "bin/naps"
+    "naps": "naps.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
   }
 }
