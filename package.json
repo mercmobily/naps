@@ -1,0 +1,29 @@
+{
+  "name": "naps",
+  "description": "A multi-purpose node app manager",
+  "keywords": [
+    "node",
+    "deploy"
+  ],
+  "main": "index.js",
+  "version": "0.1.1",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mercmobily/naps.git"
+  },
+  "author": "Tony Mobily",
+  "dependencies": {
+    "fs-extra": "^2.1.2",
+    "nodemailer": "^4.0.0"
+  },
+  "bugs": {
+    "url": "https://github.com/mercmobily/naps/issues"
+  },
+  "homepage": "https://github.com/mercmobily/naps",
+  "devDependencies": {},
+  "license": "GPL",
+  "bin": {
+    "ryver": "bin/naps"
+  }
+}
