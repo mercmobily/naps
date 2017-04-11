@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
 /*
-
-* Function to check if entries in /var/naps are current, delete if not (check proc filesystem)
-* Add timestamp, uid and appName to output of child processes
+* Add timestamp, uid and appName to output of child processes, and check for "SERVER HAS STOPPED" at the same time
+* Watch on development directory, restart if a file changes
 */
 
 var fs = require('fs-extra');
@@ -14,6 +13,7 @@ var spawn = require('child_process').spawn;
 var path = require('path');
 var transporter = nodemailer.createTransport('smtp://localhost:25');
 
+require('console-stamp')(console, '[mmm-dd-yyyy HH:MM:ss HH:MM:ss.l]');
 
 var action = process.argv[ 2 ];
 var p1 = process.argv[ 3 ];
@@ -38,16 +38,15 @@ Usage:
     ${cmd} started or ${cmd} s
     List all apps currently running
 
-    ${cmd} startall [continuous]
+    ${cmd} startall [forever]
     Start all apps that can be started. 
-    If [continuous] is specified, then it will try and restart every 10 seconds, and
-    it will not generate any output
 
     ${cmd} stopall
     Stop all apps
 
-    ${cmd} start <app-name>
+    ${cmd} start <app-name> [forever]
     Start a specific app
+    If 'forever' is passed, naps will monitor the app and make sure that it's restarted when needed
 
     ${cmd} stop <app-name>
     Start a specific app
@@ -130,6 +129,7 @@ Generator.prototype = {
 
     DBADMIN: function( confLine, userPassword ){
       this.dbAdminUserPassword = userPassword;
+      return '';
     },
 
     LOGDIR: function( confLine, logdir ){
@@ -380,7 +380,10 @@ Generator.prototype = {
 
   },
 
-  start: function( confLine, quiet, exitOnFail ){
+  start: function( confLine, forever ){
+
+    var self = this;
+    var dead = false;
 
     var env = confLine[ 6 ];
 
@@ -390,18 +393,44 @@ Generator.prototype = {
     try { 
       running = fs.existsSync( pidFile );
     } catch( e ) {
-      console.log("Error checking if process file exists:", e );
-      if( exitOnFail ) process.exit(9);
+      console.log("Error checking if naps process file exists:", e );
       return;
     }
 
     console.log("Checked for:", pidFile );
     if( running ){
-      console.log(`Cannot run process ${env.APPNAME} as the process is already running`);
-      return;
+
+      try { 
+        var pidInfo = fs.readFileSync( pidFile ).toString().split(':');
+      } catch( e ) {
+        console.log("Error reading the pid file for the process:", e );
+        return;
+      }
+
+      try { 
+        var pid = pidInfo[ 1 ];
+        running = fs.existsSync(`/proc/${pid}` );
+      } catch( e ) {
+        console.log("Error checking if process file exists:", e );
+        return;
+      }
+    
+      if( running ) {
+        console.log(`Cannot run process ${env.APPNAME} as the process is already running`);
+        return;
+      } else {
+
+        try { 
+          fs.unlinkSync( pidFile );
+        } catch( e ) {
+          console.log("Error deleting the pid file (process wasn't there):", e );
+          return;
+        }
+ 
+      }
     }
 
-   console.log("RUNNING:", confLine );
+    console.log("RUNNING:", confLine );
 
     // Work out gid and uid
     var uidGid = confLine[ 4 ].split( /:/ );
@@ -420,34 +449,76 @@ Generator.prototype = {
     console.log("Starting " + confLine[ 1 ] + " in directory", cwd, "with gid and uid", gid, uid, "and with env:\nCommand:\n", command, "\nEnvironment:", env );
     
     try {
-      var out = fs.openSync(`${this.logdir}/${lp}-out.log`, 'a');
-      var err = fs.openSync(`${this.logdir}/${lp}-err.log`, 'a');
+      var out = fs.createWriteStream(`${this.logdir}/${lp}-out.log`, { flags: 'a', defaultEncoding: 'utf8' } );
+      var err = fs.createWriteStream(`${this.logdir}/${lp}-err.log`, { flags: 'a', defaultEncoding: 'utf8' } );
     } catch( e ){
       console.log("Could not open log files for writing:", e );
-      if( exitOnFail) process.exit(9);
       return;
     }
 
     try {
-      var child = childProcess.spawn( '/usr/bin/node', [ server ], { stdio: [ 'ignore', out, err ], detached: true, env: env, uid: uid, gid: gid, cwd: cwd } );
+      var child = childProcess.spawn( '/usr/bin/node', [ server ], { env: env, uid: uid, gid: gid, cwd: cwd } );
     } catch( e ) {
       console.log("Could not run node:", e );
-      if( exitOnFail) process.exit(9);
       return;
     }
-    child.unref();
+
+    child.stdout.on('data', function( data ){
+
+      // The child process has stopped dealing with incoming connections.
+      // For all intents and purposes, the process is useless and dead
+      var d = data.toString();
+      if( data.toString().match( /^THE SERVER HAS STOPPED$/m ) ){
+        console.log("The child process has stopped taking connections!");
+        try { fs.unlinkSync( pidFile ); } catch( e ){}
+        dead = true;
+
+        maybeRestart();    
+      }
+      out.write( data );
+    });
+    child.stderr.on('data', function( data ){
+      err.write( data );
+    });
+
 
     try { 
       fs.writeFileSync( pidFile, `${env.APPNAME}:${child.pid}` );
     } catch( e ) {
-      console.log("Error creating pid file for process...", e );
-      if( exitOnFail) process.exit(9);
+      console.log("Error creating pid file for process. This WILL cause problems", e );
     }
 
+
+    var maybeRestart = function(){
+      if( forever ){
+        console.log(`Restarting ${appName} since it stopped working...`, confLine );
+        self.start( confLine );
+      }
+    }
+
+    // CLEANUP code
+    var cleanUp = function(){
+      try { 
+        console.log("Cleaning up pid file for " + env.APPNAME );
+        fs.unlinkSync( pidFile );
+        child.kill('SIGTERM');
+      } catch( e ) {
+        console.log("Error cleaning up (but will keep on working):", e );
+      }
+      maybeRestart();
+    }
+    process.on( 'SIGTERM', function(){
+      if( !dead ) cleanUp();
+    });
+
+    process.on('uncaughtException', function (err) {
+      if( !dead ) cleanUp();
+    });
+ 
     console.log("Success!");
   },
 
-  stop: function( confLine, quiet, exitOnFail ){
+  stop: function( confLine ){
 
     var env = confLine[ 6 ];
     var appName = confLine[ 1 ];
@@ -649,11 +720,6 @@ Generator.constructur = Generator;
 var generator = new Generator('/etc/naps.conf');
 
 
-
-
-
-
-
 switch( action ){
 
   case 'started':
@@ -701,7 +767,18 @@ switch( action ){
       console.log( usage );
       process.exit( 5 );
     }
- 
+
+     if( p2 && ( p2 != 'forever' ) ){
+      console.log( usage );
+      process.exit(1);
+    }
+
+    if( p2 == 'forever' && action == 'stop' ){
+      console.log("The [forever] option will only work for start and startall");
+      process.exit(1);
+    }
+
+
     var confLine = generator.startableHash[ p1 ];
     if( !confLine ){
       console.log("Startable server not found:", p1 );
@@ -709,9 +786,9 @@ switch( action ){
       process.exit( 5 );
     } else {
       if( action == 'start' ){
-        generator.start( confLine, false, true );
+        generator.start( confLine, p2 == 'forever' );
       } else {
-        generator.stop( confLine, false, true );
+        generator.stop( confLine );
       }
     }
 
@@ -720,13 +797,13 @@ switch( action ){
   case 'startall':
   case 'stopall':
 
-    if( p1 && ( p1 != 'continuous' ) ){
-      console.log("Usage: configurer.js list [write]");
+    if( p1 && ( p1 != 'forever' ) ){
+      console.log( usage );
       process.exit(1);
     }
 
-    if( p1 == 'continuous' && action == 'stopall' ){
-      console.log("The [continuous] option will only work for startall");
+    if( p1 == 'forever' && action == 'stopall' ){
+      console.log("The [forever] option will only work for start and startall");
       process.exit(1);
     }
 
@@ -736,47 +813,11 @@ switch( action ){
         var confLine = generator.startableHash[ appName ];
 
         if( action == 'startall' ){
-          generator.start( confLine, quiet, false );
+          generator.start( confLine, p1 == 'forever' );
         } else {
-          generator.stop( confLine, false, false );
+          generator.stop( confLine );
         }
       });    
-    }
-
-    if( p1 == 'continuous' ){
-
-      require('console-stamp')(console, '[mmm-dd-yyyy HH:MM:ss HH:MM:ss.l]');
-
-      console.log("****** Running in continuous mode, waiting an initial 10s");
-      // Wait 10s
-      setTimeout( function(){
-
-        console.log("****** Enough waiting, starting the apps!");
-
-        // Start the lot
-        startStopAllFunc( false );
-
-        console.log("****** Waiting 240s to give time to the apps to settle");
-
-
-        // Wait 240s 
-        setTimeout( function(){
-
-          console.log("****** Enough waiting: setting the interval, it will run every 10 seconds");
-
-            
-          // Interval 10s: Try and rerun
-          setInterval( function(){
-
-            console.log("****** Attempting to start the lot");
-            startStopAllFunc( false );
-
-          }, 10000  );
-        }, 240000);
-      }, 10000 );
-
-    } else {
-      startStopAllFunc( false );
     }
 
   break;
