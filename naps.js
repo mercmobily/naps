@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 /*
-* Add timestamp, uid and appName to output of child processes, and check for "SERVER HAS STOPPED" at the same time
+* Add command ot CLEAN /var/naps and /var/naps/deaf
+* Fix 'list' and 'started' so that it's only one command, 'list',listing deaf ones too
 * Watch on development directory, restart if a file changes
 */
 
@@ -13,7 +14,6 @@ var spawn = require('child_process').spawn;
 var path = require('path');
 var transporter = nodemailer.createTransport('smtp://localhost:25');
 
-require('console-stamp')(console, '[mmm-dd-yyyy HH:MM:ss HH:MM:ss.l]');
 
 var action = process.argv[ 2 ];
 var p1 = process.argv[ 3 ];
@@ -33,10 +33,7 @@ Usage:
     Write the expanded nginx config onto the CONF file
 
     ${cmd} startable or ${cmd} l
-    List all apps that can be started
-
-    ${cmd} started or ${cmd} s
-    List all apps currently running
+    List all apps, showing the ones that have started
 
     ${cmd} startall [forever]
     Start all apps that can be started. 
@@ -380,30 +377,45 @@ Generator.prototype = {
 
   },
 
-  start: function( confLine, forever ){
+  start: function( confLine, forever, pid ){
 
     var self = this;
-    var dead = false;
+    var deaf = false;
+    var child;
 
     var env = confLine[ 6 ];
+    var appName = env.APPNAME;
+
+    var ts = {
+      get d(){
+        return (new Date()).toISOString();
+      }
+    }
+
+
 
     var running;
+
+    var lid = pid ? `${appName} [${pid}] -> ` : `${appName} [no pid] ->`;
+
+    console.log(`${ts.d} ${lid} STARTING: ${appName}` );
+    if( forever ) console.log(`${ts.d} ${lid} Running app, making sure it's respawn when needed...`);
 
     var pidFile = `${this.vardir}/${env.APPNAME}`;
     try { 
       running = fs.existsSync( pidFile );
     } catch( e ) {
-      console.log("Error checking if naps process file exists:", e );
+      console.log(`${ts.d} ${lid} Error checking if naps process file exists:`, e );
       return;
     }
 
-    console.log("Checked for:", pidFile );
+    console.log(`${ts.d} ${lid} Checked for:`, pidFile );
     if( running ){
 
       try { 
         var pidInfo = fs.readFileSync( pidFile ).toString().split(':');
       } catch( e ) {
-        console.log("Error reading the pid file for the process:", e );
+        console.log(`${ts.d} ${lid} Error reading the pid file for the process:`, e );
         return;
       }
 
@@ -411,26 +423,25 @@ Generator.prototype = {
         var pid = pidInfo[ 1 ];
         running = fs.existsSync(`/proc/${pid}` );
       } catch( e ) {
-        console.log("Error checking if process file exists:", e );
+        console.log(`${ts.d} ${lid} Error checking if process file exists:`, e );
         return;
       }
     
       if( running ) {
-        console.log(`Cannot run process ${env.APPNAME} as the process is already running`);
+        console.log(`${ts.d} ${lid} Cannot run process ${env.APPNAME} as the process is already running`);
         return;
       } else {
 
         try { 
           fs.unlinkSync( pidFile );
         } catch( e ) {
-          console.log("Error deleting the pid file (process wasn't there):", e );
+          console.log(`${ts.d} ${lid} Error deleting the pid file (process wasn't there):`, e );
           return;
         }
  
       }
     }
-
-    console.log("RUNNING:", confLine );
+    console.log(`${ts.d} ${lid} App ${env.APPNAME} isn't already started, starting it now...`);
 
     // Work out gid and uid
     var uidGid = confLine[ 4 ].split( /:/ );
@@ -442,80 +453,130 @@ Generator.prototype = {
 
     var lp = env.APPNAME;
     var server = env.SERVER;
-    var appName = env.APPNAME;
-    //var command = `/usr/bin/node ${server} >> ${this.logdir}/${lp}-out.log 2>>${this.logdir}/${lp}-err.log &`;
-    var command = `/usr/bin/node  /var/www/node-apps/gigsnet/${server}`;
 
-    console.log("Starting " + confLine[ 1 ] + " in directory", cwd, "with gid and uid", gid, uid, "and with env:\nCommand:\n", command, "\nEnvironment:", env );
+    console.log(`${ts.d} ${lid} Starting ` + confLine[ 1 ] + " in directory", cwd, "with gid and uid", gid, uid );
     
     try {
       var out = fs.createWriteStream(`${this.logdir}/${lp}-out.log`, { flags: 'a', defaultEncoding: 'utf8' } );
       var err = fs.createWriteStream(`${this.logdir}/${lp}-err.log`, { flags: 'a', defaultEncoding: 'utf8' } );
-    } catch( e ){
-      console.log("Could not open log files for writing:", e );
-      return;
-    }
-
-    try {
-      var child = childProcess.spawn( '/usr/bin/node', [ server ], { env: env, uid: uid, gid: gid, cwd: cwd } );
+      child = childProcess.spawn( '/usr/bin/node', [ server ], { env: env, uid: uid, gid: gid, cwd: cwd } );
     } catch( e ) {
-      console.log("Could not run node:", e );
+      console.log(`${ts.d} ${lid} Could not run node:`, e );
       return;
     }
 
-    child.stdout.on('data', function( data ){
-
-      // The child process has stopped dealing with incoming connections.
-      // For all intents and purposes, the process is useless and dead
-      var d = data.toString();
-      if( data.toString().match( /^THE SERVER HAS STOPPED$/m ) ){
-        console.log("The child process has stopped taking connections!");
-        try { fs.unlinkSync( pidFile ); } catch( e ){}
-        dead = true;
-
-        maybeRestart();    
-      }
-      out.write( data );
-    });
-    child.stderr.on('data', function( data ){
-      err.write( data );
-    });
-
+    var oldLid = lid;
+    lid = `${appName} [${child.pid}]`;
 
     try { 
       fs.writeFileSync( pidFile, `${env.APPNAME}:${child.pid}` );
     } catch( e ) {
-      console.log("Error creating pid file for process. This WILL cause problems", e );
+      console.log(`${ts.d} ${lid} Error creating pid file for process. This WILL cause problems`, e );
     }
 
 
-    var maybeRestart = function(){
-      if( forever ){
-        console.log(`Restarting ${appName} since it stopped working...`, confLine );
-        self.start( confLine );
+    console.log(`${ts.d} ${oldLid} [${child.pid}] Success!`);
+    console.log(`${ts.d} ${lid} Let the fun begin!`);
+
+
+
+    // ***************************************************************
+    // ******** CHILD/EVENTS MANAGEMENT STARTS HERE ******************
+    // ***************************************************************
+
+    child.stdout.on('data', function( data ){
+
+      try { 
+        // The child process has stopped dealing with incoming connections.
+        // For all intents and purposes, the process is useless and dead
+        var d = data.toString();
+        if( data.toString().match( /^THE SERVER HAS STOPPED$/m ) ){
+          console.log(`${ts.d} ${lid} The child process has stopped taking connections!`);
+          movePidAsDeaf();
+          maybeRestart();    
+        }
+        var pre = (new Date()).toISOString() + ' [' + child.pid + '] ';
+        out.write( Buffer.from( data.toString().trim().split("\n").map( (l,i) => { return pre + l }) .join('\n') + '\n' ));
+      } catch( e ){
+        console.log(`${ts.d} ${lid} Error while redirecting stream to standard output!`, e );
+      }
+    });
+    child.stderr.on('data', function( data ){
+      try {
+        var pre = (new Date()).toISOString() + ' [' + child.pid + '] ';
+        err.write( Buffer.from( '\n' + data.toString().trim().split("\n").map( (l) => { return pre + l }) .join('\n') ));
+      } catch( e ){
+        console.log(`${ts.d} ${lid} Error while redirecting stream to standard error!`, e );
+      }
+    });
+
+    child.once( 'exit', function(){
+      console.log(`${ts.d} ${lid} Child for app ${env.APPNAME} exited`);
+      deletePidFile();
+      if( ! deaf ) maybeRestart();
+      else console.log(`${ts.d} ${lid} Not restarting the app since it was deaf`);
+      child.unref();
+    });
+
+    //process.once('uncaughtException', function (err) {
+    //  console.log(`${ts.d} ${lid} Main naps process crashed, terminating all children...`, err );
+    //  terminateChild();
+    //  child.unref();
+    //});
+
+    //var termHandle = process.on('SIGTERM', function (err) {
+    //  console.log(`${ts.d} ${lid} Main naps process received SIGTERM, terminating all children...`, err );
+    //  terminateChild();
+    //  child.unref();
+    //});
+ 
+    // *************************************************
+    // ************ SUPPORT FUNCTIONS ******************
+    // *************************************************
+
+    var deletePidFile = function(){
+
+      try { 
+        console.log(`${ts.d} ${lid} Cleaning up pid file for ` + env.APPNAME, 'as:', pidFile );
+        fs.unlinkSync( pidFile );
+      } catch( e ) {
+        console.log(`${ts.d} ${lid} Error cleaning up ${env.APPNAME}:`, e );
       }
     }
 
-    // CLEANUP code
-    var cleanUp = function(){
-      try { 
-        console.log("Cleaning up pid file for " + env.APPNAME );
-        fs.unlinkSync( pidFile );
+    // RESTART IF FOREVER IS ON
+    var maybeRestart = function(){
+
+      if( forever ){
+        console.log(`${ts.d} ${lid} Restarting ${appName} since it stopped working...` );
+        self.start( confLine, forever, child.pid );
+      }
+    }
+
+    // SEND SIGTERM TO CHILD
+    var terminateChild = function(){
+      try {
         child.kill('SIGTERM');
       } catch( e ) {
-        console.log("Error cleaning up (but will keep on working):", e );
+        console.log(`${ts.d} ${lid} Could not send SIGTERM to child process:`, e );
+        return;
       }
-      maybeRestart();
     }
-    process.on( 'SIGTERM', function(){
-      if( !dead ) cleanUp();
-    });
 
-    process.on('uncaughtException', function (err) {
-      if( !dead ) cleanUp();
-    });
- 
-    console.log("Success!");
+    var movePidAsDeaf = function(){
+      var newPidFile = `${self.vardir}/deaf/${child.pid}`
+      console.log(`${ts.d} ${lid} Moving ${pidFile} to ${newPidFile}`);
+      try {
+        fs.moveSync( pidFile, newPidFile, { overwrite: true } );
+      } catch( e ){
+        console.log(`${ts.d} ${lid} Could NOT move the pid file into the 'deaf' zone: this will create problems`);
+        return;
+      }
+      pidFile = newPidFile;
+      deaf = true;
+    }
+
+
   },
 
   stop: function( confLine ){
@@ -544,8 +605,6 @@ Generator.prototype = {
       var pidInfo = fs.readFileSync( pidFile ).toString().split(':');
     } catch( e ) {
       console.log("Error reading the pid file for the process:", e );
-      if( exitOnFail) process.exit(9);
-      if( exitOnFail) process.exit(9);
       return;
     }
 
@@ -553,15 +612,12 @@ Generator.prototype = {
       process.kill( pidInfo[ 1 ], 'SIGTERM' );
     } catch( e ){
       console.log("Error sending SIGTERM signal:", e );
-      if( exitOnFail) process.exit(9);
-      return;
     }
 
     try { 
       fs.unlinkSync( pidFile );
     } catch( e ) {
       console.log("Error deleting the pid file for the pricess after kill:", e );
-      if( exitOnFail) process.exit(9);
       return;
     }
 
@@ -763,6 +819,7 @@ switch( action ){
   case 'start':
   case 'stop':
    
+
     if( !p1 ){
       console.log( usage );
       process.exit( 5 );
@@ -794,8 +851,17 @@ switch( action ){
 
   break;
 
-  case 'startall':
   case 'stopall':
+
+    Object.keys( generator.startableHash ).forEach( (appName ) => {
+      console.log(`Stopping ${appName}`);
+      execSync(`naps stop ${appName} >> /var/log/naps.log &`);
+    });    
+
+  break;
+
+  case 'startall':
+
 
     if( p1 && ( p1 != 'forever' ) ){
       console.log( usage );
@@ -808,17 +874,32 @@ switch( action ){
     }
 
 
-    var startStopAllFunc = function( quiet ){
+    arg = p1 || '';
+
+
+    console.log("Starting all in 30 seconds...");
+
+    var gap = 10000;
+
+    setTimeout( function(){
+
       Object.keys( generator.startableHash ).forEach( (appName ) => {
         var confLine = generator.startableHash[ appName ];
 
-        if( action == 'startall' ){
-          generator.start( confLine, p1 == 'forever' );
-        } else {
-          generator.stop( confLine );
-        }
-      });    
-    }
+        setTimeout( function(){ 
+          console.log(`Starting ${appName}`);
+          try { 
+            out = fs.openSync('/var/log/naps.log', 'a'),
+            err = fs.openSync('/var/log/naps.log', 'a');
+            spawn('naps', ['start', appName, arg ], { stdio: [ 'ignore', out, err ], detached: true }).unref();
+          } catch( e ){
+            console.log("ERROR:", e );
+          }
+        }, gap);
+        gap += 10000;
+      });
+    }, 30000 );
+
 
   break;
 
@@ -989,4 +1070,5 @@ switch( action ){
     process.exit( 3 );
   break;
 }
+
 
