@@ -129,6 +129,10 @@ Usage:
 
 
     SYSADMIN OPTIONS
+
+    naps logs <app-name> [err]
+    Will show node logs for that app. Will display stdout by default.
+    If 'err' is added, it will display the node instance's stderr
  
     naps deploy <development-app> <production-app>
     Will overwrite development app onto production one, archiving production

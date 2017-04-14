@@ -99,14 +99,19 @@ Usage:
     Will check the error logs and inform the admin if more entries are added
     Error logs are assumed to be in $LOGDIR/$APPNAME-err.log
 
+
     SYSADMIN OPTIONS
  
+    ${cmd} logs <app-name> [err]
+    Will show node logs for that app. Will display stdout by default.
+    If 'err' is added, it will display the node instance's stderr
+
     ${cmd} deploy <development-app> <production-app>
-    Will overwrite development app onto production one, archiving the current production one.
+    Will overwrite development app onto production one, archiving production
     Files under public/f will be spared
 
     ${cmd} dbprod2dev <production-app> <development-app>
-    Copy database from production app to development app. DEVEL DB WILL BE ZAPPED.
+    Copy database from production app to development. DEVEL DB WILL BE ZAPPED.
 
     ${cmd} nginx-restart or ${cmd} nr
     Restart nginx
@@ -179,7 +184,7 @@ Generator.prototype = {
 
   configGeneratorMethods: {
 
-    DBADMIN: function( confLine, userPassword ){
+    DBADMINCREDENTIALS: function( confLine, userPassword ){
       this.dbAdminUserPassword = userPassword;
       return '';
     },
@@ -197,7 +202,7 @@ Generator.prototype = {
     },
 
 
-    DIR: function( confLine, dir ){
+    APPSDIR: function( confLine, dir ){
       this.dir = dir; 
       return '';
     },
@@ -1128,7 +1133,7 @@ switch( action ){
     arg = p1 || '';
 
 
-    console.log( `${ts.d} [main] [startall] -> STARTALL INVOKED. Starting all in 10 seconds...` );
+    console.log( `${ts.d} [main] [startall] -> STARTALL INVOKED. Starting all in 30 seconds...` );
 
     var gap = 5000;
 
@@ -1203,12 +1208,12 @@ switch( action ){
     var j = path.join;
 
     if( ! generator.startableHash[ p1 ] ){
-      console.log("development-app needs to be a runnable entry:", p1 );
+      console.log("development-app needs to be a startable entry:", p1 );
       process.exit( 9 );
     }
 
     if( ! generator.startableHash[ p2 ] ){
-      console.log("production-app needs to be a runnable entry:", p2 );
+      console.log("production-app needs to be a startable entry:", p2 );
       process.exit( 10 );
     }
 
@@ -1235,12 +1240,12 @@ switch( action ){
     var productionPath = j( p, p2 );
 
     if( ! fs.existsSync( develPath )){
-      console.log("development-app needs to be a runnable entry:", p1 );
+      console.log("development-app needs to be a startable entry:", p1 );
       process.exit( 11 );
     }
 
     if( ! fs.existsSync( productionPath )){
-      console.log("production-app needs to be a runnable entry:", p2 );
+      console.log("production-app needs to be a startable entry:", p2 );
       process.exit( 12 );
     }
 
@@ -1283,12 +1288,12 @@ switch( action ){
 
 
     if( ! generator.startableHash[ p1 ] ){
-      console.log("production-app needs to be a runnable entry:", p1 );
+      console.log("production-app needs to be a startable entry:", p1 );
       process.exit( 10 );
     }
 
     if( ! generator.startableHash[ p2 ] ){
-      console.log("development-app needs to be a runnable entry:", p2 );
+      console.log("development-app needs to be a startable entry:", p2 );
       process.exit( 9 );
     }
 
@@ -1339,10 +1344,10 @@ switch( action ){
     var password = up[ 1 ];  
 
 
-    // Check that the entry is a runnable process
+    // Check that the entry is a startable process
     var confLine = generator.startableHash[ p1 ];
     if( !confLine ) {
-      console.log(`${p1} needs to be a runnable entry:`, p1 );
+      console.log(`${p1} needs to be a startable entry:`, p1 );
       process.exit( 9 );
     }
 
@@ -1351,6 +1356,39 @@ switch( action ){
     var args = ['-u', user, '-p', password, '--authenticationDatabase', 'admin', db ];
     console.log("Running: mongo " +  args.join(' ' ) );
     spawn('mongo', ['-u', user, '-p', password, '--authenticationDatabase', 'admin', db ], {stdio: 'inherit', shell: true});
+  break;
+
+  case 'logs':
+
+    if( !p1 ){
+      console.log( usage );
+      process.exit( 5 );
+    }
+
+    if( p2 && ( p2 != 'err' ) ){
+      console.log( usage );
+      process.exit(1);
+    }
+
+    var confLine = generator.startableHash[ p1 ];
+    if( !confLine ){
+      console.log("Startable server not found:", p1 );
+      console.log( "Use the 'list' parameters for the list of apps" );
+      process.exit( 5 );
+    }
+
+    // 'out' by default
+    p2 = p2 || 'out';
+
+    var logFile = `${generator.logdir}/${p1}-${p2}.log`;
+
+    var child = spawn('less', [logFile], {stdio: 'inherit', shell: true, detached: true });
+
+
+    // Prevent SIGINT from killing this process
+    process.on( 'SIGINT', function(){
+      process.kill( child.pid, 'SIGINT' );
+    } );
   break;
 
 
@@ -1366,5 +1404,4 @@ switch( action ){
     process.exit( 3 );
   break;
 }
-
 
