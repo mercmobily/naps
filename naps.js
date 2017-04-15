@@ -765,7 +765,7 @@ Generator.prototype = {
       return;
     }
 
-    console.log( `${ts.d} [${action}] [main] -> Executing ${action} on ${confLine[ 2 ]}, parent of ${confLine[ 1 ]}` );
+    console.log( `${ts.d} [${action}] [main] -> Executing ${action} on parent of ${confLine[ 1 ]}` );
     if( action == 'kill' ) console.log(`${ts.d} [${action}] [main] -> Since it's a kill request, ${confLine[ 1 ]} will also get SIGKILL` );
 
 
@@ -1424,4 +1424,5 @@ switch( action ){
     process.exit( 3 );
   break;
 }
+
 
