@@ -576,23 +576,8 @@ Generator.prototype = {
         return;
       }
   
-
-      // This will allow us to kill them all later
-      allChildrenPids.push( child.pid );
-
-      // Now that the child PID has changed, the lid will have to change too
-      var oldLid = lid;
-      lid = `${appName} [start] [${child.pid}]`;
-  
-      try { 
-        fs.writeFileSync( pidFile, `${env.APPNAME}:${child.pid}:${process.pid}` );
-      } catch( e ) {
-        console.log(`${ts.d} ${lid} Error creating pid file for process. This WILL cause problems`, e );
-      }
-  
-      console.log(`${ts.d} ${oldLid} [${child.pid}] Success!`);
-      console.log(`${ts.d} ${lid} Let the fun begin!`);
-  
+      
+ 
       // ***************************************************************
       // ******** CHILD/EVENTS MANAGEMENT STARTS HERE ******************
       // ***************************************************************
@@ -630,6 +615,26 @@ Generator.prototype = {
         else console.log(`${ts.d} ${lid} Not restarting the app since it was deaf`);
         child.unref();
       });
+ 
+      // This will allow us to kill them all later
+      allChildrenPids.push( child.pid );
+
+      // *************************************************
+      // ************ WRAPPING UP       ******************
+      // *************************************************
+
+      // Now that the child PID has changed, the lid will have to change too
+      var oldLid = lid;
+      lid = `${appName} [start] [${child.pid}]`;
+  
+      try { 
+        fs.writeFileSync( pidFile, `${env.APPNAME}:${child.pid}:${process.pid}` );
+      } catch( e ) {
+        console.log(`${ts.d} ${lid} Error creating pid file for process. This WILL cause problems`, e );
+      }
+  
+      console.log(`${ts.d} ${oldLid} [${child.pid}] Success!`);
+      console.log(`${ts.d} ${lid} Let the fun begin!`);
   
       // *************************************************
       // ************ SUPPORT FUNCTIONS ******************
