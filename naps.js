@@ -130,7 +130,26 @@ var ts = {
     return (new Date()).toISOString() + ` [${process.pid}]`;
   }
 }
- 
+
+
+// Gorgeous code from https://davidwalsh.name/javascript-debounce-function
+function debounce(func, wait, immediate) {
+  var timeout;
+  return function() {
+    var context = this, args = arguments;
+      var later = function() {
+      timeout = null;
+      if (!immediate) func.apply(context, args);
+    };
+    var callNow = immediate && !timeout;
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+    if (callNow) func.apply(context, args);
+  };
+};
+
+
+
 var Generator = function( inputConfPath ){
   this.mailTo = '';
   this.ip = '';
@@ -497,6 +516,8 @@ Generator.prototype = {
 
     actualStart( confLine, forever, pid );
 
+
+    foreverRestartDelay = 0;
     function actualStart( confLine, forever, pid ){
 
       var deaf = false;
@@ -576,8 +597,6 @@ Generator.prototype = {
         return;
       }
   
-      
- 
       // ***************************************************************
       // ******** CHILD/EVENTS MANAGEMENT STARTS HERE ******************
       // ***************************************************************
@@ -660,13 +679,24 @@ Generator.prototype = {
           return;
         }
 
- 
         if( forever || restartOnceCard  ){
-          console.log(`${ts.d} ${lid} Restarting ${appName} ` + ( restartOnceCard ? "(Process wants to be restarted)" : '' ) );
-          if( restartOnceCard ) restartOnceCard = false;
-          actualStart( confLine, forever, child.pid );
+          console.log(`${ts.d} ${lid} Restarting ${appName}` + ( restartOnceCard ? " (Process wants to be restarted)" : '' ) );
+
+          // Restart either immediately or after a small break
+          if( restartOnceCard ){
+            actualStart( confLine, forever, child.pid );
+            restartOnceCard = false;
+            foreverRestartDelay = 0;
+          } else {
+            var inSeconds = Math.floor( foreverRestartDelay / 1000 );
+            console.log(`${ts.d} ${lid} This is a 'forever' restart: delaying restart by ${inSeconds} seconds`);
+            setTimeout( function(){ 
+              actualStart( confLine, forever, child.pid );
+              foreverRestartDelay = foreverRestartDelay + 4000;
+            }, foreverRestartDelay );
+          }
         }
-      }
+      };
   
       // TURN PID AS DEAF
       var movePidAsDeaf = function(){
@@ -697,28 +727,13 @@ Generator.prototype = {
     var appDir = `${this.dir}/${env.APPNAME}`;
 
  
-    // Quick and dirty debounce function
-    function debounce( func, wait ) {
-      var timeout = null;
-      return function() {
-        var self = this, args = arguments;
-
-        var later = function(){
-          timeout = null;
-          func.apply( self, args );
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout( later, wait );
-      };
-    };
-
     var lastEvent = new Date();
     console.log(`${ts.d} [watch] [main] -> Watching changes in ${appName} (in ${appDir}` );
     fs.watch( appDir, {}, debounce( function( type, file ){
       console.log(`${ts.d} [watch] [main] -> Change detected. Restarting server` );
 
       generator.stop( confLine, 'restart' );
-    }, 1000));
+    }, 1000 ));
   },
 
 
