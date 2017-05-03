@@ -22,7 +22,7 @@ Naps is used to:
 * Allocate local ports for the defined apps
 * Set a sane (overridable) environment for the app to run into
 * Set which user the app will run under
-* Run and stop defined apps using `forever`
+* Run and stop defined apps 
 * List all applications marked as startable
 * Run and stop all defined apps
 * Deploy a "development" environment, archiving the current "production" one away
@@ -35,16 +35,6 @@ Naps is used to:
   to admins if they grow
 * Restart automatically a server (in a debouncing fashion) if files are 
   modified, especially useful in development environments
-
-### Notes
-
-The `forever` utility is used for process management more than
-restart-management. Basicaly, `forever` is used with the parameter `-m 1`,
-which effectively inhibits `forever`'s function of restarting a process.
-`forever` is used however to `name` processes, and to group them under
-different users. To make sure that processes stay up, `naps startall continuous`
-will check that a port that is meant to be listened to actually is -- if not,
-it will restart the process.
 
 ## Usage
 
