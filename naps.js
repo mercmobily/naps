@@ -156,6 +156,7 @@ var Generator = function( inputConfPath ){
   this.dir = '/var/www/node-apps';
   this.logdir = '/var/log/naps';
   this.vardir = '/var/naps';
+  this.etcdir = '/etc/naps';
   this.portMap = {};
   this.confLines = [];
   this.startableHash = {};
@@ -225,6 +226,12 @@ Generator.prototype = {
       this.dir = dir; 
       return '';
     },
+
+    ETCDIR: function( confLine, etcdir ){
+      this.etcdir = etcdir; 
+      return '';
+    },
+
 
     MAILFROM: function( confLine, mailFrom ){
       this.mailFrom = mailFrom; 
@@ -1271,12 +1278,16 @@ switch( action ){
 
     var s,d;
 
+
+    console.log("Exiting early, this deployment procedure sucks");
+    process.exit( 0 );
+
     console.log("Archiving away public files in development environment...");
     s = j( develPath, "/public/f");
     d = j( p, '_archived', "f." + p1 + '.' + now );
     execSync(`mv ${s} ${d}`);
 
-    console.log("Moving public files from production to development...");
+    console.log("Moving public files from production to development (it will be production soon)...");
     s = j( productionPath, "/public/f");
     d = j( develPath, "/public/f");
     execSync(`mv ${s} ${d}`);
@@ -1286,7 +1297,7 @@ switch( action ){
     d = j( p, '_archived', p2 + '.' + now );
     execSync(`mv ${s} ${d}`);
 
-    console.log("Turning current development environment into production...");
+    console.log("Turning current development environment (now with production files) into production...");
     s = develPath;
     d = productionPath;
     execSync(`mv ${s} ${d}`);
@@ -1300,6 +1311,13 @@ switch( action ){
     s = j(productionPath, '.git','config');
     d = j(productionPath, '.git', 'config-DEPLOYED' );
     execSync(`mv ${s} ${d}`);
+
+    console.log("Executing post-deployment script if needed..." );
+    s = `${generator.etcdir}/${p2}.postdeploy`;
+    console.log("Script is: "+ s );
+
+    if( fs.existsSync( s ) ) console.log( execSync( s ).toString()  );
+    else console.log("Script not there, skipping!");
 
     console.log("DEPLOY DONE!");
   break;
